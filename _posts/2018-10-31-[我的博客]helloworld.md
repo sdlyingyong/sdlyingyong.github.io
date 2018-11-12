@@ -25,7 +25,7 @@ tags:
 
 # 优化计划
  
- - 自定义域名解析 通过更加直观的域名进行 bolg.kissoole.com
-
+ - 自定义域名解析通过更加直观的域名进行bolg.kissoole.com 已完成 
+ - 清除无用资料
 
 
