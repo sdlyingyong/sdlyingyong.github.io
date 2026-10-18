@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0A1310">
+<title>听世界 · 夜航电台</title>
+<meta name="description" content="一颗只有电台的地球。每个光点是一台真实的地方电台，落在它自己的经纬度上。转动地球，准星停在哪，就听哪里。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='5' fill='%23F0603A'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23F2EEE3' stroke-width='2' opacity='.5'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#080E0C; --ink:#F2EEE3; --dim:#7A8B83; --faint:rgba(242,238,227,.14);
+  --signal:#F0603A; --panel:rgba(10,19,16,.82);
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);
+  font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+body{position:fixed;inset:0}
+#sky{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#sky.drag{cursor:grabbing}
+.glow{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(70% 55% at 50% 46%,rgba(70,140,120,.10),transparent 70%),
+             radial-gradient(120% 90% at 50% 120%,rgba(240,96,58,.05),transparent 60%)}
+
+/* 地球边缘的一圈大气：位置和半径由 JS 跟着相机距离算，永远贴着球的轮廓 */
+.limb{position:absolute;left:50%;top:50%;border-radius:50%;pointer-events:none;
+  transform:translate(-50%,-50%);will-change:width,height;
+  box-shadow:0 0 46px 10px rgba(86,190,160,.05), 0 0 12px 2px rgba(120,215,185,.09);
+  background:radial-gradient(circle,
+    rgba(120,208,180,0) calc(100% - 14px),
+    rgba(120,208,180,.055) calc(100% - 9px),
+    rgba(158,232,206,.16) calc(100% - 2px),
+    rgba(190,242,222,.26) 100%,
+    rgba(190,242,222,0) calc(100% + 2px))}
+
+/* 准星 */
+.reticle{position:absolute;left:50%;top:50%;width:74px;height:74px;margin:-37px 0 0 -37px;
+  pointer-events:none;opacity:.55;transition:opacity .25s,transform .25s;
+  animation:breathe 4.2s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.4}50%{opacity:.62}}
+.reticle.lock{opacity:1;transform:scale(.82);animation:none}
+.reticle svg{display:block;overflow:visible}
+.reticle .ring{fill:none;stroke:var(--ink);stroke-width:.8;opacity:.35}
+.reticle .tick{stroke:var(--ink);stroke-width:1;opacity:.55}
+.reticle .dot{fill:var(--signal);opacity:0;transition:opacity .2s}
+.reticle.lock .dot{opacity:1}
+.reticle.lock .ring{stroke:var(--signal);opacity:.9}
+
+/* 顶栏 */
+header{position:absolute;top:0;left:0;right:0;padding:18px 20px;display:flex;
+  align-items:flex-start;justify-content:space-between;gap:12px;pointer-events:none;
+  padding-top:calc(18px + env(safe-area-inset-top))}
+header::before{content:'';position:absolute;left:0;right:0;top:0;height:130px;z-index:-1;
+  background:linear-gradient(to bottom,rgba(10,19,16,.94) 0%,rgba(10,19,16,.7) 45%,transparent 100%);
+  pointer-events:none}
+header>*{pointer-events:auto}
+.brand{display:flex;align-items:center;gap:9px;font-weight:500;font-size:17px;letter-spacing:.01em}
+.brand svg{width:22px;height:22px;flex:none}
+.brand small{display:block;font:400 11px/1.3 var(--mono);color:var(--dim);letter-spacing:.04em;
+  margin-top:2px;font-weight:400}
+.tools{display:flex;gap:8px}
+.btn{appearance:none;border:1px solid var(--faint);background:rgba(10,19,16,.5);color:var(--ink);
+  font:12px/1 var(--mono);padding:8px 13px;border-radius:999px;cursor:pointer;white-space:nowrap;
+  transition:background .18s,border-color .18s,color .18s;backdrop-filter:blur(8px)}
+.btn:hover{background:rgba(242,238,227,.1);border-color:var(--faint)}
+.btn:active{transform:translateY(1px)}
+.btn.on{background:var(--ink);color:#0A1310;border-color:var(--ink)}
+
+/* 底部卡片 */
+.deck{position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(560px,calc(100% - 32px));
+  padding-bottom:calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;
+  align-items:center;gap:10px;pointer-events:none}
+.deck>*{pointer-events:auto}
+.hint{font:12px/1.6 var(--mono);color:var(--dim);text-align:center;letter-spacing:.02em;
+  opacity:1;transition:opacity .3s;padding:0 12px}
+.hint b{color:var(--ink);font-weight:400}
+.card{width:100%;background:var(--panel);border:1px solid var(--faint);border-radius:16px;
+  padding:16px 18px;backdrop-filter:blur(14px);display:none;
+  animation:rise .34s cubic-bezier(.2,.7,.3,1)}
+.card.show{display:block}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.card .row1{display:flex;align-items:flex-start;gap:14px}
+.card .meta{flex:1;min-width:0}
+.card .k{font:10px/1 var(--mono);letter-spacing:.16em;color:var(--signal);text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;margin-bottom:7px}
+.card .k i{width:5px;height:5px;background:var(--signal);border-radius:50%;animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.card h2{margin:0;font-size:19px;font-weight:500;line-height:1.3;letter-spacing:.01em;
+  overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.card .place{margin-top:5px;font-size:13px;color:var(--dim);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.card .tags{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+.card .tags span{font:11px/1 var(--mono);color:var(--dim);border:1px solid var(--faint);
+  border-radius:999px;padding:4px 9px}
+.play{flex:none;width:52px;height:52px;border-radius:50%;border:1px solid var(--signal);
+  background:var(--signal);color:#170502;display:grid;place-items:center;cursor:pointer;
+  transition:transform .16s,background .16s;margin-top:4px}
+.play:hover{transform:scale(1.05)}
+.play svg{width:20px;height:20px;fill:currentColor}
+.play.paused{background:transparent;color:var(--signal)}
+.card .warn{margin-top:11px;font-size:11.5px;line-height:1.5;color:#E8A33D;
+  border-top:1px solid var(--faint);padding-top:9px;display:none}
+.card .warn.show{display:block}
+.card .bar{margin-top:12px;height:1px;background:var(--faint);position:relative;overflow:hidden}
+.card .bar i{position:absolute;inset:0;background:var(--signal);width:0;opacity:.6;
+  animation:seek 1.6s ease-out infinite}
+@keyframes seek{0%{width:0;opacity:.7}70%{width:100%;opacity:0}100%{width:100%;opacity:0}}
+.card.playing .bar i{animation:seek 2.4s ease-in-out infinite}
+
+/* 缩放刻度 */
+.scale{position:absolute;right:20px;bottom:calc(22px + env(safe-area-inset-bottom));
+  font:11px/1.6 var(--mono);color:var(--dim);text-align:right;pointer-events:none;letter-spacing:.06em}
+.scale b{color:var(--ink);font-weight:400}
+
+/* 加载 / 错误 */
+.boot{position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);
+  z-index:20;transition:opacity .5s;text-align:center;padding:24px}
+.boot.done{opacity:0;pointer-events:none}
+.boot .wrap{max-width:380px}
+.boot h1{margin:0 0 10px;font-size:26px;font-weight:500;letter-spacing:-.01em}
+.boot p{margin:0;color:var(--dim);font-size:13px}
+.boot .n{margin-top:14px;font:11px/1 var(--mono);color:var(--signal);letter-spacing:.14em}
+.boot .err{color:#F09595;font:12px/1.7 var(--mono);text-align:left;white-space:pre-wrap;
+  margin-top:16px;max-height:40vh;overflow:auto}
+.spin{width:26px;height:26px;margin:20px auto 0;border:1.5px solid var(--faint);
+  border-top-color:var(--signal);border-radius:50%;animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 关于面板 */
+.sheet{position:absolute;inset:0;z-index:15;display:none;place-items:center;padding:24px;
+  background:rgba(4,9,7,.72);backdrop-filter:blur(6px)}
+.sheet.show{display:grid}
+.sheet .box{max-width:440px;width:100%;background:var(--bg);border:1px solid var(--faint);
+  border-radius:18px;padding:26px 24px}
+.sheet h3{margin:0 0 12px;font-size:17px;font-weight:500}
+.sheet p{margin:0 0 12px;font-size:13.5px;color:var(--dim);line-height:1.7}
+.sheet a{color:var(--ink);text-underline-offset:2px}
+.sheet .close{margin-top:6px}
+@media (max-width:560px){
+  header{padding:14px 14px;padding-top:calc(14px + env(safe-area-inset-top))}
+  .brand{font-size:15px;gap:7px}
+  .brand svg{width:19px;height:19px}
+  .brand small{font-size:10px;white-space:nowrap}
+  .tools{gap:6px}
+  .btn{padding:7px 10px;font-size:11px}
+  .card h2{font-size:17px}
+  .card{padding:14px}
+  .scale{display:none}
+  .reticle{width:58px;height:58px;margin:-29px 0 0 -29px}
+}
+</style>
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+<div class="glow"></div>
+<div class="limb" id="limb"></div>
+
+<div class="reticle" id="reticle">
+  <svg viewBox="0 0 74 74" width="74" height="74">
+    <circle class="ring" cx="37" cy="37" r="30"/>
+    <circle class="dot" cx="37" cy="37" r="2.6"/>
+    <line class="tick" x1="37" y1="2" x2="37" y2="11"/>
+    <line class="tick" x1="37" y1="63" x2="37" y2="72"/>
+    <line class="tick" x1="2" y1="37" x2="11" y2="37"/>
+    <line class="tick" x1="63" y1="37" x2="72" y2="37"/>
+  </svg>
+</div>
+
+<header>
+  <div class="brand">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M52.3 27.6A21 21 0 1 1 37.4 12.7" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+      <path d="M25.5 40.5L34.5 31.5" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="47.9" cy="17.1" r="4.6" fill="#F0603A"/>
+    </svg>
+    <div>听世界
+      <small id="count">载入中…</small>
+    </div>
+  </div>
+  <div class="tools">
+    <button class="btn" id="rand" title="随机跳到一个地方">随机漫游</button>
+    <button class="btn" id="about">关于</button>
+  </div>
+</header>
+
+<div class="deck">
+  <div class="hint" id="hint">
+    拖动 <b>地球</b> · 把准星对准一个<b>光点</b> · 滚轮缩放
+  </div>
+  <div class="card" id="card">
+    <div class="row1">
+      <div class="meta">
+        <div class="k"><i></i><span id="onair">已锁定</span></div>
+        <h2 id="name">—</h2>
+        <div class="place" id="place">—</div>
+        <div class="tags" id="tags"></div>
+      </div>
+      <button class="play paused" id="play" aria-label="播放">
+        <svg viewBox="0 0 24 24" id="ico"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+      </button>
+    </div>
+    <div class="warn" id="warn"></div>
+    <div class="bar"><i></i></div>
+  </div>
+</div>
+
+<div class="scale" id="scale"><b>39°</b><br>视野</div>
+
+<div class="sheet" id="sheet">
+  <div class="box">
+    <h3>听世界 · 夜航电台</h3>
+    <p>每个电台都是某个地方的一扇小窗：它的语言、它的新闻、它的广告、那里的人今早挑的歌。</p>
+    <p>这里是一颗只有电台的地球。每个光点就是一台真实存在的地方电台，落在它自己的经纬度上，海岸线是 Natural Earth 的公开数据。转动地球，准星停在哪，就听哪里。贴近地面时，同一个城市里的电台会散成一圈旋涡，一台一台挑。</p>
+    <p>电台目录来自 <a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a>（社区维护，公有领域），音频直接从各台自己的服务器播放，本站不转存任何内容。</p>
+    <p style="font-size:12px;font-family:var(--mono)">数据构建于 <span id="built">—</span></p>
+    <button class="btn close" id="closeSheet">知道了</button>
+  </div>
+</div>
+
+<div class="boot" id="boot">
+  <div class="wrap">
+    <h1>听世界</h1>
+    <p>正在点亮这颗地球…</p>
+    <div class="spin" id="spin"></div>
+    <div class="n" id="bootN"></div>
+    <div class="err" id="bootErr"></div>
+  </div>
+</div>
+
+<audio id="audio" preload="none"></audio>
+
+<script>
+(function(){
+'use strict';
+
+var $ = function(id){ return document.getElementById(id); };
+var canvas = $('sky'), bootEl = $('boot'), audio = $('audio');
+var card = $('card'), reticle = $('reticle');
+
+var S = {
+  n: 0, radioN: 0, coastFrom: 0, coastCount: 0, core: null, meta: null,
+  lat: null, lng: null, dir: null,      // 原始方向（单位向量）
+  rdir: null,                            // 渲染用（可能被螺旋摊开）
+  lum: null, lum0: null, id: null,
+  yaw: -2.86, pitch: -0.42, dist: 2.95,
+  vYaw: 0, vPitch: 0,
+  dragging: false, lastX: 0, lastY: 0, lastT: 0,
+  sel: -1, playing: false, open: false,
+  clusters: null, spiralT: -1, dpr: 1
+};
+
+var FOV = 46;                 // 竖直视角，固定；远近靠相机距离 dist 调
+var DIST_MIN = 1.085, DIST_MAX = 5.2;
+var needPick = false, lastMove = 0;
+function touchView(){ needPick = true; lastMove = performance.now(); }
+
+// ---------- 数据 ----------
+function fail(msg){
+  $('spin').style.display = 'none';
+  $('bootErr').textContent = msg;
+  bootEl.classList.add('show');
+}
+
+function loadJSON(url){
+  return fetch(url, {cache:'no-cache'}).then(function(r){
+    if(!r.ok) throw new Error(url + ' → HTTP ' + r.status);
+    return r.json();
+  });
+}
+
+function boot(){
+  Promise.all([loadJSON('data/core.json'), loadJSON('data/coast.json')]).then(function(res){
+    var core = res[0], coast = res[1];
+    S.core = core;
+    buildStations(core, coast);
+    $('bootN').textContent = core.n.toLocaleString('en-US') + ' 个电台 · ' + core.countries.length + ' 个国家/地区';
+    var phone = window.matchMedia('(max-width:560px)').matches;
+    $('count').textContent = core.n.toLocaleString('en-US') + ' 个电台' +
+      (phone ? '' : ' · ' + core.countries.length + ' 个国家/地区');
+    $('built').textContent = (core.builtAt || '').slice(0,10);
+    initGL();
+    updateScale();
+    animate();
+    setTimeout(function(){ bootEl.classList.add('done'); }, 260);
+    return loadJSON('data/meta.json');
+  }).then(function(meta){
+    S.meta = meta;
+    if(S.sel >= 0) fillCard(S.sel);
+    var q = new URLSearchParams(location.search).get('s');
+    if(q !== null && S.meta && S.meta.nm[+q]) jumpTo(+q);
+  }).catch(function(e){
+    fail('数据加载失败：\n' + (e && e.message || e) +
+         '\n\n请确认 data/core.json / data/coast.json / data/meta.json 都在，页面需通过 http(s) 打开，不能直接双击本地文件。');
+  });
+}
+
+function buildStations(core, coast){
+  var n = core.n, i, j, e;
+  var DUST = 34000;
+
+  // 先算总顶点数：电台 + 星尘 + 海岸线段（每段两个顶点）
+  var lines = (coast && coast.lines) || [];
+  var segs = 0;
+  for(i=0;i<lines.length;i++) segs += Math.max(0, lines[i].length/2 - 1);
+
+  S.radioN = n;
+  S.coastFrom = n + DUST;
+  S.coastCount = segs * 2;
+  S.n = n + DUST + segs * 2;
+
+  S.lat = core.lat; S.lng = core.lng;
+  S.dir = new Float32Array(S.n*3);
+  S.rdir = new Float32Array(S.n*3);
+  S.lum = new Float32Array(S.n);
+  S.id = new Float32Array(S.n);
+
+  for(i=0;i<n;i++){
+    var geo = core.geo ? core.geo[i] : 0;
+    var laD = core.lat[i] / 100, loD = core.lng[i] / 100;
+    // 只有州中心的台要稍微撒开一点点，否则一个州的几十个台会叠成一个死白点
+    if(geo > 0){
+      laD += (hash(i*7.3) - 0.5) * 0.11;
+      loD += (hash(i*11.7) - 0.5) * 0.11 / Math.max(Math.cos(laD*Math.PI/180), 0.35);
+    }
+    var la = laD * Math.PI/180, lo = loD * Math.PI/180;
+    var clat = Math.cos(la);
+    var x = clat*Math.sin(lo), y = Math.sin(la), z = clat*Math.cos(lo);
+    S.dir[i*3] = S.rdir[i*3] = x;
+    S.dir[i*3+1] = S.rdir[i*3+1] = y;
+    S.dir[i*3+2] = S.rdir[i*3+2] = z;
+    S.id[i] = i;
+    // 星等：约 5% 的台给到接近 1.2 的亮度，做"亮星"；其余压在 0.3~0.62，免得糊成一片
+    var br = core.br[i] || 64;
+    var h = hash(i);
+    var bright = h > 0.952 ? 1.05 + hash(i*3.1) * 0.25 : 0.28 + h * 0.34;
+    S.lum[i] = bright + Math.min(br,192)/192*(h > 0.952 ? 0.1 : 0.12);
+  }
+  // 背景星尘：均匀撒在球面上，只为层次，不可拾取
+  var rnd = 1234567;
+  function r(){ rnd = (rnd*1103515245 + 12345) & 0x7fffffff; return rnd / 0x7fffffff; }
+  for(i=n;i<S.coastFrom;i++){
+    var u = r()*2 - 1, th = r()*Math.PI*2, sr = Math.sqrt(1-u*u);
+    S.dir[i*3] = S.rdir[i*3] = sr*Math.cos(th);
+    S.dir[i*3+1] = S.rdir[i*3+1] = u;
+    S.dir[i*3+2] = S.rdir[i*3+2] = sr*Math.sin(th);
+    S.id[i] = -2;
+    S.lum[i] = 0.075 + r()*0.22;
+  }
+
+  // 海岸线：LINES 模式，每段两个顶点，aId = -3
+  var k = S.coastFrom;
+  for(i=0;i<lines.length;i++){
+    var arr = lines[i], len = arr.length;
+    for(j=0; j+3 < len; j+=2){
+      for(e=0;e<2;e++){
+        var lo2 = arr[j + e*2] / 100 * Math.PI/180;
+        var la2 = arr[j + e*2 + 1] / 100 * Math.PI/180;
+        var c2 = Math.cos(la2);
+        S.dir[k*3]   = S.rdir[k*3]   = c2*Math.sin(lo2);
+        S.dir[k*3+1] = S.rdir[k*3+1] = Math.sin(la2);
+        S.dir[k*3+2] = S.rdir[k*3+2] = c2*Math.cos(lo2);
+        S.id[k] = -3;
+        S.lum[k] = 0.55;
+        k++;
+      }
+    }
+  }
+  S.lum0 = new Float32Array(S.lum);
+  buildClusters();
+}
+
+function hash(i){
+  var h = Math.sin(i*12.9898)*43758.5453;
+  return h - Math.floor(h);
+}
+
+// 同城聚合：0.4° 网格，成员 > 1 才算一簇
+function buildClusters(){
+  var g = {}, n = S.radioN, i, key;
+  for(i=0;i<n;i++){
+    key = Math.round(S.lat[i]/40) + ',' + Math.round(S.lng[i]/40);
+    (g[key] || (g[key] = [])).push(i);
+  }
+  var out = [];
+  for(key in g){
+    var m = g[key];
+    if(m.length < 2) continue;
+    var cx=0, cy=0, cz=0;
+    for(i=0;i<m.length;i++){
+      cx += S.dir[m[i]*3]; cy += S.dir[m[i]*3+1]; cz += S.dir[m[i]*3+2];
+    }
+    var L = Math.hypot(cx,cy,cz) || 1;
+    out.push({c:[cx/L, cy/L, cz/L], m:m});
+  }
+  S.clusters = out;
+}
+
+// ---------- WebGL ----------
+var gl, prog, buf, uRot, uDist, uF, uAspect, uSel, uPx, uDustFade, W=1, H=1;
+
+var VS = [
+'attribute vec3 aPos;',
+'attribute float aLum;',
+'attribute float aId;',
+'uniform mat3 uRot;',
+'uniform float uDist;',
+'uniform float uF;',
+'uniform float uAspect;',
+'uniform float uPx;',
+'uniform float uSel;',
+'varying float vLum;',
+'varying float vSel;',
+'varying float vDust;',
+'varying float vLine;',
+'varying float vFace;',
+'void main(){',
+'  vec3 q = uRot * aPos;',
+'  float face = -q.z - 1.0 / uDist;',        // >0：这个点在朝向相机的那半球
+'  vFace = face;',
+'  vDust = 1.0 - step(-1.5, aId);',
+'  vLine = 1.0 - step(-2.5, aId);',
+'  float sel = 1.0 - step(0.5, abs(aId - uSel));',
+'  vSel = sel;',
+'  if(face < 0.0 && vLine < 0.5){ gl_Position = vec4(2.0,2.0,2.0,1.0); gl_PointSize = 0.0; vLum = 0.0; return; }',
+'  vec3 pc = q + vec3(0.0, 0.0, uDist);',
+'  gl_Position = vec4(-pc.x * uF / (pc.z * uAspect), pc.y * uF / pc.z, 0.0, 1.0);',
+'  gl_PointSize = uPx * (uDist / pc.z) * (0.5 + clamp(aLum, 0.0, 1.2) * 0.78) * (1.0 + sel * 2.4);',
+'  vLum = aLum + sel * 0.7;',
+'}'].join('\n');
+
+var FS = [
+'precision mediump float;',
+'uniform float uDustFade;',
+'varying float vLum;',
+'varying float vSel;',
+'varying float vDust;',
+'varying float vLine;',
+'varying float vFace;',
+'void main(){',
+'  if(vLine > 0.5){',                        // 海岸线：1px 细线，贴边时淡出
+'    float a = smoothstep(0.0, 0.045, vFace) * 0.62;',
+'    gl_FragColor = vec4(0.40, 0.56, 0.52, a);',
+'    return;',
+'  }',
+'  vec2 d = gl_PointCoord - 0.5;',
+'  float r = length(d);',
+'  if(r > 0.5) discard;',
+'  float a = smoothstep(0.5, 0.06, r);',
+'  a = a * a * a;',
+'  vec3 warm = vec3(1.0, 0.95, 0.84);',
+'  vec3 cold = vec3(0.82, 0.88, 1.0);',
+'  vec3 hot  = vec3(1.0, 0.38, 0.22);',
+'  vec3 col = mix(mix(warm, cold, vDust), hot, vSel);',
+'  float lum = clamp(vLum, 0.0, 1.0) * mix(1.0, uDustFade, vDust);',
+'  gl_FragColor = vec4(col * a, a * lum);',
+'}'].join('\n');
+
+function shader(type, src){
+  var s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+
+function initGL(){
+  gl = canvas.getContext('webgl', {antialias:false, alpha:false, depth:false, premultipliedAlpha:true});
+  if(!gl){
+    fail('这个浏览器没有可用的 WebGL，无法绘制地球。换 Chrome / Safari / Edge 最新版再试。');
+    throw new Error('no webgl');
+  }
+  prog = gl.createProgram();
+  gl.attachShader(prog, shader(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+
+  buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, S.n * 5 * 4, gl.DYNAMIC_DRAW);
+  upload(0, S.n);
+
+  bind('aPos', 3, 0);
+  bind('aLum', 1, 12);
+  bind('aId', 1, 16);
+
+  uRot = gl.getUniformLocation(prog,'uRot');
+  uDist = gl.getUniformLocation(prog,'uDist');
+  uF    = gl.getUniformLocation(prog,'uF');
+  uAspect = gl.getUniformLocation(prog,'uAspect');
+  uPx  = gl.getUniformLocation(prog,'uPx');
+  uSel = gl.getUniformLocation(prog,'uSel');
+  uDustFade = gl.getUniformLocation(prog,'uDustFade');
+
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.clearColor(8/255, 14/255, 12/255, 1);
+  resize();
+}
+
+function bind(name, size, offset, stride){
+  var loc = gl.getAttribLocation(prog, name);
+  if(loc < 0) return;
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride || 20, offset);
+}
+
+// 交错写入 [x,y,z,lum,id]
+function upload(from, count){
+  if(count <= 0) return;
+  var tmp = new Float32Array(count*5), i, k;
+  for(i=from, k=0; i<from+count; i++, k++){
+    tmp[k*5]   = S.rdir[i*3];
+    tmp[k*5+1] = S.rdir[i*3+1];
+    tmp[k*5+2] = S.rdir[i*3+2];
+    tmp[k*5+3] = Math.min(S.lum[i], 1.35);
+    tmp[k*5+4] = S.id[i];
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, from*20, tmp);
+  var err = gl.getError();
+  if(err) console.warn('bufferSubData 失败', err, 'count', count);
+}
+
+function resize(){
+  S.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = canvas.clientWidth || window.innerWidth;
+  H = canvas.clientHeight || window.innerHeight;
+  canvas.width = Math.round(W * S.dpr);
+  canvas.height = Math.round(H * S.dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+// ---------- 相机 ----------
+// 有效竖直视角系数：竖屏时按宽度收，保证地球在屏幕上永远是正圆且不被左右裁掉
+function ufVal(){
+  var aspect = W / H;
+  var uf = 1 / Math.tan(FOV * Math.PI / 360);
+  return aspect < 1 ? uf * aspect : uf;
+}
+
+function rotMat(yaw, pitch){
+  var cy = Math.cos(-yaw), sy = Math.sin(-yaw);
+  var cp = Math.cos(pitch), sp = Math.sin(pitch);
+  // Rx(pitch) * Ry(-yaw)
+  return new Float32Array([
+    cy,        sp*sy,      -cp*sy,
+    0,         cp,          sp,
+    sy,       -sp*cy,       cp*cy
+  ]);
+}
+
+// 屏幕正中央那个地球表面点的世界方向（= 朝向相机的那一点）
+// rotMat 把世界转到相机空间，相机在 -z 侧，所以取 R^T·(0,0,-1) = -(m2,m5,m8)
+function frontVec(){
+  var m = rotMat(S.yaw, S.pitch);
+  return [-m[2], -m[5], -m[8]];
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  if(S.n === 0 || !gl) return;
+
+  if(!S.dragging){
+    if(S.vYaw || S.vPitch) lastMove = performance.now();
+    S.yaw += S.vYaw;
+    S.pitch += S.vPitch;
+    S.vYaw *= 0.90;
+    S.vPitch *= 0.90;
+    if(Math.abs(S.vYaw) < 1e-4) S.vYaw = 0;
+    if(Math.abs(S.vPitch) < 1e-4) S.vPitch = 0;
+  }
+  S.pitch = Math.max(-1.35, Math.min(1.35, S.pitch));
+
+  var t = spiralT();
+  if(Math.abs(t - S.spiralT) > 0.015){ S.spiralT = t; applySpiral(t); }
+
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(prog);
+  gl.uniformMatrix3fv(uRot, false, rotMat(S.yaw, S.pitch));
+  var aspect = W / H;
+  var uf = ufVal();
+  gl.uniform1f(uDist, S.dist);
+  gl.uniform1f(uF, uf);
+  gl.uniform1f(uAspect, aspect);
+  gl.uniform1f(uPx, 2.8 * S.dpr);
+  gl.uniform1f(uSel, S.sel);
+  gl.uniform1f(uDustFade, Math.max(0.08, Math.min(1, (S.dist - 1.18) / 1.7)));
+  // 海岸线先画（LINES），再画电台与星尘（POINTS）；加色混合，顺序不影响结果
+  if(S.coastCount) gl.drawArrays(gl.LINES, S.coastFrom, S.coastCount);
+  gl.drawArrays(gl.POINTS, 0, S.coastFrom);
+  updateLimb();
+
+  if(needPick && !S.dragging && performance.now() - lastMove > 300){
+    needPick = false;
+    doPick(true);
+  }
+}
+
+// ---------- 螺旋展开 ----------
+function spiralT(){
+  // 贴近球面（dist 小）时把一个城市的台沿螺线摊开；拉远就收回原位
+  if(S.dist >= 1.66) return 0;
+  if(S.dist <= 1.24) return 1;
+  var k = (1.66 - S.dist) / 0.42;
+  return k*k*(3 - 2*k);
+}
+
+function applySpiral(t){
+  var n = S.n, i;
+  if(t === 0){
+    if(S.spiralT === -1){ return; }
+    S.rdir.set(S.dir);
+    S.lum.set(S.lum0);
+    upload(0, n);
+    return;
+  }
+  S.rdir.set(S.dir);
+  S.lum.set(S.lum0);
+  var fw = frontVec(), cl = S.clusters, q, j;
+  // 螺线半径按屏幕算（≈ 半屏高的 24%），否则贴到地面时会炸到屏幕外
+  var maxR = 0.24 * Math.max(0, S.dist - 1) / ufVal() * t;
+  for(q=0; q<cl.length; q++){
+    var c = cl[q].c, m = cl[q].m;
+    var d = c[0]*fw[0] + c[1]*fw[1] + c[2]*fw[2];
+    if(d < 0.86) continue;                       // 只看屏心 30° 内
+    var up = Math.abs(c[1]) > 0.99 ? [1,0,0] : [0,1,0];
+    var t1 = norm(cross(c, up));
+    var t2 = cross(c, t1);
+    // 阿基米德螺线：2.6 圈，半径收在 24% 半屏高，簇越大点越密
+    var turns = 2.6;
+    var cnt = m.length;
+    for(j=0; j<cnt; j++){
+      var idx = m[j];
+      var ang = (j / cnt) * Math.PI * 2 * turns;
+      var rad = Math.sqrt((j + 0.5) / cnt) * maxR;
+      var ca = Math.cos(ang)*rad, sa = Math.sin(ang)*rad;
+      var x = c[0] + t1[0]*ca + t2[0]*sa;
+      var y = c[1] + t1[1]*ca + t2[1]*sa;
+      var z = c[2] + t1[2]*ca + t2[2]*sa;
+      var L = Math.hypot(x,y,z);
+      S.rdir[idx*3] = x/L; S.rdir[idx*3+1] = y/L; S.rdir[idx*3+2] = z/L;
+      // 散开后要看得见：把这簇暗星提到 0.75 以上，旋涡才成形
+      if(t > 0.04) S.lum[idx] = Math.max(S.lum0[idx], 0.78);
+    }
+  }
+  upload(0, n);
+}
+
+function cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function norm(a){ var L = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/L, a[1]/L, a[2]/L]; }
+
+// ---------- 拾取 ----------
+function doPick(showCard){
+  var m = rotMat(S.yaw, S.pitch);
+  var aspect = W / H;
+  var uf = ufVal();
+  var d = S.dist, invD = 1 / d;
+  var best = -1, bestD = 1e9;
+  for(var i=0;i<S.radioN;i++){
+    var x = S.rdir[i*3], y = S.rdir[i*3+1], z = S.rdir[i*3+2];
+    var qz = m[2]*x + m[5]*y + m[8]*z;
+    if(qz > -invD) continue;                       // 背半球：看不见
+    var pz = qz + d;
+    if(pz <= 0.002) continue;
+    var qx = m[0]*x + m[3]*y + m[6]*z;
+    var qy = m[1]*x + m[4]*y + m[7]*z;
+    var sx = -qx * uf / (pz * aspect);
+    var sy = qy * uf / pz;
+    var dd = sx*sx + sy*sy;
+    if(dd < bestD){ bestD = dd; best = i; }
+  }
+  // 屏心 30% 半径内才算锁定
+  if(best >= 0 && bestD < 0.30*0.30){
+    if(best !== S.sel){
+      S.sel = best;
+      reticle.classList.add('lock');
+      fillCard(best);
+      if(showCard) card.classList.add('show');
+      $('hint').style.opacity = 0;
+    }
+  }else{
+    if(S.sel >= 0 && !S.playing){
+      reticle.classList.remove('lock');
+    }
+  }
+}
+
+function fillCard(i){
+  if(!S.meta){
+    $('name').textContent = '正在载入台名…';
+    $('place').textContent = '';
+    $('tags').innerHTML = '';
+    return;
+  }
+  var core = S.core;
+  $('name').textContent = S.meta.nm[i] || '（无台名）';
+  var cc = core.countries[core.cc[i]];
+  var region = core.rg[i] >= 0 ? core.regions[core.rg[i]] : '';
+  if(!region || region === '-' || region === '--' || /^n\/?a$/i.test(region)) region = '';
+  var place = [region, cc ? cc[1] : ''].filter(Boolean).join(' · ');
+  $('place').textContent = place || '未知位置';
+  var g = core.genres[core.g[i]];
+  var lg = core.lg[i] >= 0 ? core.langs[core.lg[i]] : null;
+  var bits = [];
+  if(g) bits.push(g[1]);
+  if(lg && lg[1] && lg[1] !== -1 && lg[1] !== '未标注') bits.push(lg[1]);
+  if(core.br[i]) bits.push(core.br[i] + ' kbps');
+  $('tags').innerHTML = bits.map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('');
+
+  var insecure = !S.meta.s[i];
+  var warn = $('warn');
+  if(insecure){
+    warn.textContent = '⚠ 这个台只提供 http 流，当前 https 页面可能无法播放（浏览器混合内容限制）。换一个光点试试。';
+    warn.classList.add('show');
+  }else{
+    warn.classList.remove('show');
+  }
+}
+
+function esc(s){
+  return String(s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+  });
+}
+
+// ---------- 播放 ----------
+var playFailTimer = null;
+
+function togglePlay(){
+  if(S.sel < 0 || !S.meta) return;
+  if(S.playing){ stopPlay(); return; }
+  startPlay(S.sel);
+}
+
+function startPlay(i){
+  var url = S.meta.u[i];
+  if(!url){ return; }
+  clearTimeout(playFailTimer);
+  audio.src = url;
+  audio.load();
+  var p = audio.play();
+  if(p && p.catch){
+    p.then(function(){ onPlayOK(); }).catch(function(e){
+      onPlayFail(e && e.message || '浏览器拒绝播放');
+    });
+  }else{
+    onPlayOK();
+  }
+  playFailTimer = setTimeout(function(){
+    if(S.playing && audio.readyState < 2) onPlayFail('连接超时，这个台可能已经停播');
+  }, 12000);
+}
+
+function onPlayOK(){
+  clearTimeout(playFailTimer);
+  S.playing = true;
+  card.classList.add('playing');
+  var b = $('play');
+  b.classList.remove('paused');
+  $('ico').innerHTML = '<rect x="7" y="5.5" width="3.4" height="13" rx="1"/><rect x="13.6" y="5.5" width="3.4" height="13" rx="1"/>';
+  $('onair').textContent = '正在收听';
+  if('mediaSession' in navigator && S.meta){
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: S.meta.nm[S.sel] || '',
+      artist: $('place').textContent,
+      album: '听世界'
+    });
+  }
+}
+
+function onPlayFail(msg){
+  clearTimeout(playFailTimer);
+  S.playing = false;
+  card.classList.remove('playing');
+  var b = $('play');
+  b.classList.add('paused');
+  $('ico').innerHTML = '<path d="M8 5.5v13l10.5-6.5z"/>';
+  var w = $('warn');
+  w.textContent = '⚠ 播放失败：' + msg + '。可以按「随机漫游」换一个台，或者换一个光点。';
+  w.classList.add('show');
+}
+
+function stopPlay(){
+  audio.pause();
+  audio.removeAttribute('src');
+  S.playing = false;
+  card.classList.remove('playing');
+  var b = $('play');
+  b.classList.add('paused');
+  $('ico').innerHTML = '<path d="M8 5.5v13l10.5-6.5z"/>';
+  $('onair').textContent = '已暂停';
+}
+
+audio.addEventListener('playing', function(){ if(!S.playing) onPlayOK(); });
+audio.addEventListener('error', function(){
+  if(audio.src) onPlayFail('音频流打不开（可能是 http 混合内容或该台已下线）');
+});
+audio.addEventListener('stalled', function(){
+  if(S.playing) $('onair').textContent = '缓冲中…';
+});
+audio.addEventListener('waiting', function(){
+  if(S.playing) $('onair').textContent = '缓冲中…';
+});
+audio.addEventListener('playing', function(){
+  if(S.playing) $('onair').textContent = '正在收听';
+});
+
+// ---------- 交互 ----------
+var ptr = null;
+canvas.addEventListener('pointerdown', function(e){
+  if(!e.isPrimary) return;
+  canvas.setPointerCapture(e.pointerId);
+  ptr = {x:e.clientX, y:e.clientY, t:performance.now()};
+  S.dragging = true; S.lastX = e.clientX; S.lastY = e.clientY; S.lastT = performance.now();
+  S.vYaw = S.vPitch = 0;
+  canvas.classList.add('drag');
+});
+canvas.addEventListener('pointermove', function(e){
+  if(!S.dragging || !ptr || !e.isPrimary) return;
+  var dx = e.clientX - S.lastX, dy = e.clientY - S.lastY;
+  var now = performance.now(), dt = Math.max(now - S.lastT, 1);
+  var k = 0.0034 * Math.max(0.42, Math.min(1.55, (S.dist - 1) / 1.2));
+  S.yaw -= dx * k;
+  S.pitch -= dy * k;
+  S.pitch = Math.max(-1.45, Math.min(1.45, S.pitch));
+  S.vYaw = -dx * k / dt * 8;
+  S.vPitch = -dy * k / dt * 8;
+  S.lastX = e.clientX; S.lastY = e.clientY; S.lastT = now;
+  touchView();
+});
+function endDrag(){
+  S.dragging = false; ptr = null;
+  canvas.classList.remove('drag');
+  touchView();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointerleave', endDrag);
+
+canvas.addEventListener('wheel', function(e){
+  e.preventDefault();
+  var f = Math.exp(e.deltaY * 0.0013);
+  S.dist = Math.max(DIST_MIN, Math.min(DIST_MAX, S.dist * f));
+  updateScale();
+  touchView();
+}, {passive:false});
+
+var pinch = null;
+canvas.addEventListener('touchmove', function(e){
+  if(e.touches.length !== 2) return;
+  e.preventDefault();
+  var d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                     e.touches[0].clientY - e.touches[1].clientY);
+  if(pinch){
+    var f = pinch / d;
+    S.dist = Math.max(DIST_MIN, Math.min(DIST_MAX, S.dist * f));
+    updateScale();
+  }
+  pinch = d;
+}, {passive:false});
+canvas.addEventListener('touchend', function(){ pinch = null; });
+
+function updateScale(){
+  // 地球在屏幕上的角直径：dist 越小越大，用「视野宽度」表述更直观
+  var dg = Math.round(2 * Math.asin(Math.min(1, 1 / S.dist)) * 180 / Math.PI);
+  $('scale').innerHTML = '<b>' + dg + '°</b><br>视野';
+}
+
+// 大气环的像素半径：透视下地球轮廓半径 = uF·H / (2·√(d²-1))
+var limbEl = $('limb'), lastLimb = -1;
+function updateLimb(){
+  var r = ufVal() * H / (2 * Math.sqrt(Math.max(1e-4, S.dist * S.dist - 1)));
+  // 轮廓已经跑到屏幕外（贴地视角）就没必要再画这层，省一个大图层
+  var show = r < Math.max(W, H) * 1.15;
+  if(!show){
+    if(lastLimb !== -2){ lastLimb = -2; limbEl.style.opacity = 0; }
+    return;
+  }
+  if(limbEl.style.opacity === '0') limbEl.style.opacity = 1;
+  r = Math.round(r * 2) / 2;
+  if(Math.abs(r - lastLimb) < 0.5) return;
+  lastLimb = r;
+  limbEl.style.width = limbEl.style.height = (r * 2) + 'px';
+}
+
+document.addEventListener('keydown', function(e){
+  if(e.key === ' '){ e.preventDefault(); togglePlay(); }
+  if(e.key === 'Enter'){ randomJump(); }
+  if(e.key === 'Escape'){ $('sheet').classList.remove('show'); }
+  var s = 0.06;
+  if(e.key === 'ArrowLeft'){ S.yaw += s; S.vYaw = 0; }
+  if(e.key === 'ArrowRight'){ S.yaw -= s; S.vYaw = 0; }
+  if(e.key === 'ArrowUp'){ S.pitch -= s; S.vPitch = 0; }
+  if(e.key === 'ArrowDown'){ S.pitch += s; S.vPitch = 0; }
+  if(e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown'){
+    e.preventDefault(); touchView();
+  }
+  if(e.key === '+' || e.key === '='){ S.dist = Math.max(DIST_MIN, S.dist/1.2); updateScale(); touchView(); }
+  if(e.key === '-'){ S.dist = Math.min(DIST_MAX, S.dist*1.2); updateScale(); touchView(); }
+});
+
+$('play').addEventListener('click', togglePlay);
+$('rand').addEventListener('click', randomJump);
+$('about').addEventListener('click', function(){ $('sheet').classList.add('show'); });
+$('closeSheet').addEventListener('click', function(){ $('sheet').classList.remove('show'); });
+$('sheet').addEventListener('click', function(e){
+  if(e.target === $('sheet')) $('sheet').classList.remove('show');
+});
+
+function randomJump(){
+  if(!S.radioN || !S.meta) return;
+  jumpTo(Math.floor(Math.random() * S.radioN));
+}
+
+var tween = null;
+function jumpTo(i){
+  if(!S.n) return;
+  var x = S.dir[i*3], y = S.dir[i*3+1], z = S.dir[i*3+2];
+  // front = (-cp·sin yaw, -sin pitch, -cp·cos yaw) 的逆运算
+  var targetPitch = -Math.asin(Math.max(-1, Math.min(1, y)));
+  var targetYaw = Math.atan2(-x, -z);
+  var dYaw = targetYaw - S.yaw;
+  while(dYaw > Math.PI) dYaw -= Math.PI*2;
+  while(dYaw < -Math.PI) dYaw += Math.PI*2;
+  tween = {
+    t0: performance.now(), dur: 620,
+    y0: S.yaw, y1: S.yaw + dYaw,
+    p0: S.pitch, p1: targetPitch,
+    f0: S.dist, f1: Math.max(DIST_MIN, Math.min(S.dist, 1.52))
+  };
+  S.vYaw = S.vPitch = 0;
+  S.sel = i;
+  fillCard(i);
+  card.classList.add('show');
+  reticle.classList.add('lock');
+  $('hint').style.opacity = 0;
+  requestAnimationFrame(stepTween);
+  if(S.playing) startPlay(i);
+}
+
+function stepTween(){
+  if(!tween) return;
+  var k = Math.min(1, (performance.now() - tween.t0) / tween.dur);
+  var e = 1 - Math.pow(1 - k, 3);
+  S.yaw = tween.y0 + (tween.y1 - tween.y0) * e;
+  S.pitch = tween.p0 + (tween.p1 - tween.p0) * e;
+  S.dist = tween.f0 + (tween.f1 - tween.f0) * e;
+  updateScale();
+  touchView();
+  if(k < 1) requestAnimationFrame(stepTween);
+  else tween = null;
+}
+
+window.addEventListener('resize', function(){ resize(); touchView(); });
+
+window.__S = S;
+window.__spiral = applySpiral;
+window.__goto = function(la, lo){
+  var best = -1, bd = -2, laR = la*Math.PI/180, loR = lo*Math.PI/180;
+  var vx = Math.cos(laR)*Math.sin(loR), vy = Math.sin(laR), vz = Math.cos(laR)*Math.cos(loR);
+  for(var i=0;i<S.radioN;i++){
+    var d = S.dir[i*3]*vx + S.dir[i*3+1]*vy + S.dir[i*3+2]*vz;
+    if(d > bd){ bd = d; best = i; }
+  }
+  if(best >= 0) jumpTo(best);
+  return best;
+};
+window.__dbg = function(){
+  var m = rotMat(S.yaw, S.pitch), aspect = W/H;
+  var uf = ufVal();
+  var d = S.dist, invD = 1/d;
+  var fw = frontVec();
+  function proj(x, y, z){
+    var qx = m[0]*x + m[3]*y + m[6]*z;
+    var qy = m[1]*x + m[4]*y + m[7]*z;
+    var qz = m[2]*x + m[5]*y + m[8]*z;
+    var pz = qz + d;
+    return {q:[+qx.toFixed(3), +qy.toFixed(3), +qz.toFixed(3)], front: qz < -invD,
+            ndc: pz > 0.002 ? [+(-qx*uf/(pz*aspect)).toFixed(2), +(qy*uf/pz).toFixed(2)] : null};
+  }
+  var out = [];
+  for(var i=0;i<6;i++){
+    var p = proj(S.rdir[i*3], S.rdir[i*3+1], S.rdir[i*3+2]);
+    out.push({ll:[S.lat[i]/100, S.lng[i]/100], cam:p.q, front:p.front, ndc:p.ndc});
+  }
+  var inView = 0, maxC = 0;
+  for(var ci=0;ci<S.clusters.length;ci++){
+    var cc2 = S.clusters[ci];
+    if(cc2.m.length > maxC) maxC = cc2.m.length;
+    if(cc2.c[0]*fw[0] + cc2.c[1]*fw[1] + cc2.c[2]*fw[2] > 0.86) inView++;
+  }
+  var selLL = S.sel >= 0 ? [S.lat[S.sel]/100, S.lng[S.sel]/100] : null;
+  var vis = 0, visRadio = 0, visCoast = 0;
+  for(var k=0;k<S.n;k++){
+    var x2=S.rdir[k*3], y2=S.rdir[k*3+1], z2=S.rdir[k*3+2];
+    var qz = m[2]*x2 + m[5]*y2 + m[8]*z2;
+    if(qz > -invD) continue;
+    var pz2 = qz + d;
+    if(pz2 <= 0.002) continue;
+    var qx = m[0]*x2 + m[3]*y2 + m[6]*z2, qy = m[1]*x2 + m[4]*y2 + m[7]*z2;
+    var nx = -qx*uf/(pz2*aspect), ny = qy*uf/pz2;
+    if(nx > -1 && nx < 1 && ny > -1 && ny < 1){
+      vis++;
+      if(k < S.radioN) visRadio++;
+      else if(k >= S.coastFrom) visCoast++;
+    }
+  }
+  var selDot = null;
+  if(S.sel >= 0){
+    selDot = +(S.rdir[S.sel*3]*fw[0] + S.rdir[S.sel*3+1]*fw[1] + S.rdir[S.sel*3+2]*fw[2]).toFixed(3);
+  }
+  return {yaw:+S.yaw.toFixed(3), pitch:+S.pitch.toFixed(3), dist:+S.dist.toFixed(3),
+          FOV:FOV, front:[+fw[0].toFixed(2),+fw[1].toFixed(2),+fw[2].toFixed(2)],
+          W:W, H:H, cw:canvas.width, ch:canvas.height, dpr:S.dpr, n:S.n, radioN:S.radioN,
+          coastFrom:S.coastFrom, coastCount:S.coastCount,
+          glErr:gl.getError(), sel:S.sel, selLL:selLL, selDot:selDot,
+          visible:vis, visibleRadio:visRadio, visibleCoast:visCoast,
+          clusters:S.clusters.length, clustersInView:inView, maxCluster:maxC, spiralT:S.spiralT,
+          sample:out};
+};
+canvas.addEventListener('webglcontextlost', function(e){
+  e.preventDefault();
+  fail('绘图上下文被系统回收了（通常是显存紧张）。刷新页面即可恢复。');
+});
+
+boot();
+})();
+</script>
+</body>
+</html>
