@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0A1310">
 <title>听世界 · 夜航电台</title>
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="听世界">
+<link rel="apple-touch-icon" href="icon-180.png">
 <meta name="description" content="一颗只有电台的地球。每个光点是一台真实的地方电台，落在它自己的经纬度上。转动地球，准星停在哪，就听哪里。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='5' fill='%23F0603A'/%3E%3Ccircle cx='32' cy='32' r='16' fill='none' stroke='%23F2EEE3' stroke-width='2' opacity='.5'/%3E%3C/svg%3E">
 <style>
@@ -100,9 +106,14 @@ header>*{pointer-events:auto}
 .play:hover{transform:scale(1.05)}
 .play svg{width:20px;height:20px;fill:currentColor}
 .play.paused{background:transparent;color:var(--signal)}
-.card .warn{margin-top:11px;font-size:11.5px;line-height:1.5;color:#E8A33D;
+.card .warn{margin-top:11px;font-size:11.5px;line-height:1.6;color:var(--dim);
   border-top:1px solid var(--faint);padding-top:9px;display:none}
 .card .warn.show{display:block}
+.card .warn.hard{color:#E8A33D}
+.card .warn b{color:var(--ink);font-weight:500}
+.card .warn a{color:var(--signal);text-decoration:none;
+  border-bottom:1px solid rgba(240,96,58,.45);white-space:nowrap}
+.card .warn a:hover{border-bottom-color:var(--signal)}
 .card .bar{margin-top:12px;height:1px;background:var(--faint);position:relative;overflow:hidden}
 .card .bar i{position:absolute;inset:0;background:var(--signal);width:0;opacity:.6;
   animation:seek 1.6s ease-out infinite}
@@ -188,7 +199,7 @@ header>*{pointer-events:auto}
 
 <div class="deck">
   <div class="hint" id="hint">
-    拖动 <b>地球</b> · 把准星对准一个<b>光点</b> · 滚轮缩放
+    拖动 <b>地球</b> · ↑↓ 换台 · 空格 播放/暂停 · 滚轮缩放
   </div>
   <div class="card" id="card">
     <div class="row1">
@@ -214,6 +225,7 @@ header>*{pointer-events:auto}
     <h3>听世界 · 夜航电台</h3>
     <p>每个电台都是某个地方的一扇小窗：它的语言、它的新闻、它的广告、那里的人今早挑的歌。</p>
     <p>这里是一颗只有电台的地球。每个光点就是一台真实存在的地方电台，落在它自己的经纬度上，海岸线是 Natural Earth 的公开数据。转动地球，准星停在哪，就听哪里。贴近地面时，同一个城市里的电台会散成一圈旋涡，一台一台挑。</p>
+    <p style="color:var(--ink)">当收音机用：<b>↑↓</b> 换台（同一国家的台循环）、<b>空格</b> 播放/暂停。蓝牙音箱、耳机、锁屏上的「上一首 / 下一首 / 播放暂停」也会接到同一套动作上。一个台断了会自动换下一个，连试 3 个都不行才停。</p>
     <p>电台目录来自 <a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a>（社区维护，公有领域），音频直接从各台自己的服务器播放，本站不转存任何内容。</p>
     <p style="font-size:12px;font-family:var(--mono)">数据构建于 <span id="built">—</span></p>
     <button class="btn close" id="closeSheet">知道了</button>
@@ -248,8 +260,8 @@ var S = {
   yaw: -2.86, pitch: -0.42, dist: 2.95,
   vYaw: 0, vPitch: 0,
   dragging: false, lastX: 0, lastY: 0, lastT: 0,
-  sel: -1, playing: false, open: false,
-  clusters: null, spiralT: -1, dpr: 1
+  sel: -1, playing: false, want: false, open: false,
+  clusters: null, spiralT: -1, dpr: 1, chans: null
 };
 
 var FOV = 46;                 // 竖直视角，固定；远近靠相机距离 dist 调
@@ -276,6 +288,8 @@ function boot(){
     var core = res[0], coast = res[1];
     S.core = core;
     buildStations(core, coast);
+    buildChannels();
+    bindMediaKeys();
     $('bootN').textContent = core.n.toLocaleString('en-US') + ' 个电台 · ' + core.countries.length + ' 个国家/地区';
     var phone = window.matchMedia('(max-width:560px)').matches;
     $('count').textContent = core.n.toLocaleString('en-US') + ' 个电台' +
@@ -595,7 +609,8 @@ function animate(){
   gl.drawArrays(gl.POINTS, 0, S.coastFrom);
   updateLimb();
 
-  if(needPick && !S.dragging && performance.now() - lastMove > 300){
+  // 补间飞行途中不要做拾取，否则会锁定路过的那颗，最后停下的台不是你点的那个
+  if(needPick && !S.dragging && !tween && performance.now() - lastMove > 300){
     needPick = false;
     doPick(true);
   }
@@ -712,14 +727,31 @@ function fillCard(i){
   if(core.br[i]) bits.push(core.br[i] + ' kbps');
   $('tags').innerHTML = bits.map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('');
 
-  var insecure = !S.meta.s[i];
-  var warn = $('warn');
-  if(insecure){
-    warn.textContent = '⚠ 这个台只提供 http 流，当前 https 页面可能无法播放（浏览器混合内容限制）。换一个光点试试。';
-    warn.classList.add('show');
-  }else{
-    warn.classList.remove('show');
+  setWarn(stationWarn(i));
+}
+
+// http 流在 https 页面里会被浏览器拦。别拿它吓人：先写清楚，再给一条「直接打开」的出路
+function stationWarnLink(i){
+  var u = S.meta && S.meta.u[i];
+  if(!u) return '';
+  return '<a href="' + esc(u) + '" target="_blank" rel="noopener">直接在新窗口打开流 ↗</a>';
+}
+
+function stationWarn(i){
+  if(!S.meta || !S.meta.s || S.meta.s[i]) return '';
+  var link = stationWarnLink(i);
+  link = link ? ' ' + link : '';
+  if(location.protocol === 'https:'){
+    return '这个台只提供 <b>http</b> 流，https 页面里可能被浏览器拦掉。' + link;
   }
+  return '这个台只提供 <b>http</b> 流。' + link;
+}
+
+function setWarn(html, hard){
+  var w = $('warn');
+  if(!html){ w.className = 'warn'; w.innerHTML = ''; return; }
+  w.className = 'warn show' + (hard ? ' hard' : '');
+  w.innerHTML = html;
 }
 
 function esc(s){
@@ -729,18 +761,21 @@ function esc(s){
 }
 
 // ---------- 播放 ----------
-var playFailTimer = null;
+var playFailTimer = null, skipTimer = null, failStreak = 0, failedThisTry = false;
 
 function togglePlay(){
   if(S.sel < 0 || !S.meta) return;
-  if(S.playing){ stopPlay(); return; }
+  if(S.playing || S.want){ stopPlay(); return; }
   startPlay(S.sel);
 }
 
 function startPlay(i){
   var url = S.meta.u[i];
   if(!url){ return; }
+  S.want = true;                     // 用户的意图是「在放」，换台/断流都按这个来
+  failedThisTry = false;
   clearTimeout(playFailTimer);
+  clearTimeout(skipTimer);
   audio.src = url;
   audio.load();
   var p = audio.play();
@@ -758,6 +793,8 @@ function startPlay(i){
 
 function onPlayOK(){
   clearTimeout(playFailTimer);
+  clearTimeout(skipTimer);
+  failStreak = 0;
   S.playing = true;
   card.classList.add('playing');
   var b = $('play');
@@ -775,20 +812,40 @@ function onPlayOK(){
 
 function onPlayFail(msg){
   clearTimeout(playFailTimer);
+  if(failedThisTry) return;          // 同一次尝试只会报一次错（promise 和 error 事件会各来一发）
+  failedThisTry = true;
   S.playing = false;
   card.classList.remove('playing');
   var b = $('play');
   b.classList.add('paused');
   $('ico').innerHTML = '<path d="M8 5.5v13l10.5-6.5z"/>';
-  var w = $('warn');
-  w.textContent = '⚠ 播放失败：' + msg + '。可以按「随机漫游」换一个台，或者换一个光点。';
-  w.classList.add('show');
+  msg = String(msg || '').replace(/[.。\s]+$/, '');
+
+  // 只要用户的意图是「在放」，一个台断了就自动换同国家的下一个，最多连试 3 次
+  if(S.want){
+    failStreak++;
+    if(failStreak <= 3){
+      setWarn('播放失败：' + esc(msg) + '。第 ' + failStreak + '/3 次，2 秒后自动换下一个台…');
+      clearTimeout(skipTimer);
+      skipTimer = setTimeout(function(){ stepChannel(1); }, 2000);
+      return;
+    }
+    setWarn('连续 ' + failStreak + ' 个台都放不出来，先停下了。按 ↑↓ 手动换一个，或者点「随机漫游」。', true);
+    S.want = false;
+    return;
+  }
+  setWarn('播放失败：' + esc(msg) + '。可以按 ↑↓ 换台，或者换一个光点。'
+          + (S.sel >= 0 ? ' ' + stationWarnLink(S.sel) : ''), true);
 }
 
 function stopPlay(){
   audio.pause();
   audio.removeAttribute('src');
   S.playing = false;
+  S.want = false;
+  failStreak = 0;
+  clearTimeout(playFailTimer);
+  clearTimeout(skipTimer);
   card.classList.remove('playing');
   var b = $('play');
   b.classList.add('paused');
@@ -895,11 +952,13 @@ document.addEventListener('keydown', function(e){
   var s = 0.06;
   if(e.key === 'ArrowLeft'){ S.yaw += s; S.vYaw = 0; }
   if(e.key === 'ArrowRight'){ S.yaw -= s; S.vYaw = 0; }
-  if(e.key === 'ArrowUp'){ S.pitch -= s; S.vPitch = 0; }
-  if(e.key === 'ArrowDown'){ S.pitch += s; S.vPitch = 0; }
-  if(e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown'){
+  if(e.key === 'ArrowUp'){ e.preventDefault(); stepChannel(-1); return; }
+  if(e.key === 'ArrowDown'){ e.preventDefault(); stepChannel(1); return; }
+  if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
     e.preventDefault(); touchView();
   }
+  if(e.key === 'MediaTrackNext'){ e.preventDefault(); stepChannel(1); return; }
+  if(e.key === 'MediaTrackPrevious'){ e.preventDefault(); stepChannel(-1); return; }
   if(e.key === '+' || e.key === '='){ S.dist = Math.max(DIST_MIN, S.dist/1.2); updateScale(); touchView(); }
   if(e.key === '-'){ S.dist = Math.min(DIST_MAX, S.dist*1.2); updateScale(); touchView(); }
 });
@@ -917,8 +976,40 @@ function randomJump(){
   jumpTo(Math.floor(Math.random() * S.radioN));
 }
 
+// ---------- 频道：同一个国家/地区的台排成一条循环表（数组本身按票数排过） ----------
+function buildChannels(){
+  var g = {}, n = S.radioN, cc = S.core.cc, i, k;
+  for(i = 0; i < n; i++){
+    k = cc[i];
+    (g[k] || (g[k] = [])).push(i);
+  }
+  S.chans = g;
+}
+
+function stepChannel(dir){
+  if(!S.sel || S.sel < 0 || !S.chans || !S.core){ randomJump(); return; }
+  var list = S.chans[S.core.cc[S.sel]];
+  if(!list || list.length < 2){ randomJump(); return; }
+  var p = list.indexOf(S.sel);
+  var nx = list[((p < 0 ? 0 : p) + dir + list.length) % list.length];
+  jumpTo(nx, true);           // 换台时保持当前缩放，不要每次都俯冲
+}
+
+// 蓝牙音箱 / 锁屏 / 耳机上的「上一首 下一首 播放 暂停」都走这里
+function bindMediaKeys(){
+  if(!('mediaSession' in navigator)) return;
+  var ms = navigator.mediaSession;
+  function set(a, fn){
+    try { ms.setActionHandler(a, fn); } catch(e){}
+  }
+  set('play',  function(){ if(S.sel >= 0 && !S.playing) startPlay(S.sel); });
+  set('pause', function(){ if(S.playing) stopPlay(); });
+  set('nexttrack',     function(){ stepChannel(1); });
+  set('previoustrack', function(){ stepChannel(-1); });
+}
+
 var tween = null;
-function jumpTo(i){
+function jumpTo(i, keepZoom){
   if(!S.n) return;
   var x = S.dir[i*3], y = S.dir[i*3+1], z = S.dir[i*3+2];
   // front = (-cp·sin yaw, -sin pitch, -cp·cos yaw) 的逆运算
@@ -928,10 +1019,10 @@ function jumpTo(i){
   while(dYaw > Math.PI) dYaw -= Math.PI*2;
   while(dYaw < -Math.PI) dYaw += Math.PI*2;
   tween = {
-    t0: performance.now(), dur: 620,
+    t0: performance.now(), dur: keepZoom ? 420 : 620,
     y0: S.yaw, y1: S.yaw + dYaw,
     p0: S.pitch, p1: targetPitch,
-    f0: S.dist, f1: Math.max(DIST_MIN, Math.min(S.dist, 1.52))
+    f0: S.dist, f1: keepZoom ? S.dist : Math.max(DIST_MIN, Math.min(S.dist, 1.52))
   };
   S.vYaw = S.vPitch = 0;
   S.sel = i;
@@ -940,7 +1031,7 @@ function jumpTo(i){
   reticle.classList.add('lock');
   $('hint').style.opacity = 0;
   requestAnimationFrame(stepTween);
-  if(S.playing) startPlay(i);
+  if(S.want) startPlay(i);
 }
 
 function stepTween(){
